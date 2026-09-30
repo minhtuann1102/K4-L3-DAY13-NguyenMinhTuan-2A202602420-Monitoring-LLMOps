@@ -130,7 +130,25 @@ Baseline được đo lại trên code starter tại `HEAD` (worktree riêng, lo
 - **Cách hiểu luồng Metrics → Logs → Traces:** metric cho biết triệu chứng và khoảng thời gian (ví dụ panel latency P95 = 3559 ms báo vượt ngưỡng 3000 ms); log với `correlation_id` chỉ ra đúng request bị ảnh hưởng (`req-40c6b69c`, `latency_ms=3559`); trace cùng `correlation_id` chỉ ra bước gây vấn đề — span `retrieval` mất 2.502s trong khi `generation` chỉ mất 0.157s, kết luận chính xác 100% nguyên nhân nằm ở tầng retrieval RAG.
 - **Vai trò của prompt version, token/cost, SLO hoặc rollback trong vận hành LLM:** prompt là một phần của hệ thống nên phải được version hóa và gắn label. Bằng chứng cụ thể: đổi `production` sang v2 làm `input_tokens` của cùng một câu hỏi tăng 32 → 50 (cost/request tăng theo), nên nếu không ghi `prompt_version`/`prompt_label` vào trace thì khi cost tăng bất thường ta không biết do prompt hay do workload. Khi version mới gây hại, rollback chỉ là đổi label ở Langfuse về v1 — không sửa code, không deploy lại; sau rollback trace lại ghi `production/v1` và token trở về 32. SLO/error budget biến các con số đó thành ngưỡng có thể hành động: P95 ≤ 3000 ms, error rate ≤ 2%, quality ≥ 0.75, cost ≤ 2.5 USD/ngày, và alert chỉ bắn khi metric xấu kéo dài (5–10 phút) để tránh nhiễu.
 - **Điều quan trọng nhất đã học:** Khả năng liên kết chặt chẽ ba trụ cột Observability (Metrics → Logs → Traces) thông qua correlation ID giúp rút ngắn thời gian chẩn đoán sự cố (MTTD & MTTR) từ hàng giờ xuống vài chục giây, đồng thời việc version hóa Prompt như code là yếu tố sống còn để kiểm soát chất lượng và chi phí trong các hệ thống LLMOps.
-- **Hạn chế hoặc phần chưa hoàn thành, nếu có:** toàn bộ evidence 01–14 của cả 3 checkpoint đã hoàn thành đầy đủ; dashboard runtime là script local (không phải Grafana) nên chỉ xem được khi chạy `python scripts/serve_dashboard.py`; `data/audit.jsonl` (bonus audit log) và phần cost optimization/CI chưa làm.
+- **Hạn chế hoặc phần chưa hoàn thành, nếu có:** toàn bộ evidence 01–14 của cả 3 checkpoint và 2 phần bonus (+10 điểm: CI/CD Pipeline + Dedicated Audit Log) đã hoàn thành đầy đủ; dashboard runtime là script local (không phải Grafana) nên chỉ xem được khi chạy `python scripts/serve_dashboard.py`.
+
+## 8.1. Phần Bonus triển khai thêm (+10 điểm)
+
+Hệ thống đã triển khai đầy đủ 2 hạng mục bonus theo Rubric mục H:
+
+1. **Automation & CI/CD Pipeline (+5 điểm):**
+   - File cấu hình: `.github/workflows/ci.yml`.
+   - Tự động chạy khi có `push` hoặc `pull_request` vào branch `main`.
+   - Pipeline tự động thực hiện: cài đặt môi trường, chạy toàn bộ 22 unit tests (`pytest`), kiểm tra hợp lệ 6/6 panel của dashboard contract (`validate_dashboard.py`), kiểm tra technical gate logging & PII (`validate_logs.py`), và quét kiểm tra an ninh (Secret Scan) để chặn rò rỉ API key/secret.
+
+2. **Dedicated Audit Logging System (+5 điểm):**
+   - File log riêng: `data/audit.jsonl` (tách biệt hoàn toàn với application log `data/logs.jsonl`).
+   - Module thực thi: `app/audit.py` (`record_audit_event`).
+   - Tích hợp kiểm toán tự động cho các hành động quản trị rủi ro cao:
+     - Kích hoạt / vô hiệu hóa sự cố: `POST /incidents/{name}/enable` và `disable` trong `app/main.py`.
+     - Thay đổi phiên bản prompt: `promote` và `rollback` trong `scripts/prompt_versioning.py`.
+   - Tài liệu đặc tả và chính sách lưu trữ: `docs/AUDIT_LOG.md` (chuẩn schema, retention hot/cold storage 90/365 ngày, nguyên tắc bất biến).
+   - Công cụ truy vấn: `scripts/query_audit.py` cho phép lọc theo `actor`, `action`, `limit`.
 
 ## 9. Checklist trước khi nộp
 

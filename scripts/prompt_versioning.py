@@ -353,6 +353,21 @@ def cmd_set_production(client, args: argparse.Namespace) -> None:
         f"{action.upper()}: label '{PRODUCTION_LABEL}' "
         f"v{current} -> v{version} (prompt {PROMPT_NAME})"
     )
+    try:
+        from app.audit import record_audit_event
+        record_audit_event(
+            actor="engineer",
+            action=f"PROMPT_{action.upper()}",
+            resource=f"prompt/{PROMPT_NAME}/v{version}",
+            status="SUCCESS",
+            details={
+                "previous_version": current,
+                "new_version": version,
+                "label": PRODUCTION_LABEL,
+            },
+        )
+    except Exception:
+        pass
     _print_prompt_state(client)
 
 

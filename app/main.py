@@ -121,20 +121,38 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
 
 
 @app.post("/incidents/{name}/enable")
-async def enable_incident(name: str) -> JSONResponse:
+async def enable_incident(request: Request, name: str) -> JSONResponse:
     try:
+        from .audit import record_audit_event
         enable(name)
         log.warning("incident_enabled", service="control", payload={"name": name})
+        record_audit_event(
+            actor="admin",
+            action="INCIDENT_ENABLE",
+            resource=f"incident/{name}",
+            status="SUCCESS",
+            details={"incident_name": name, "correlation_id": getattr(request.state, "correlation_id", None)},
+            ip_address=request.client.host if request.client else "127.0.0.1",
+        )
         return JSONResponse({"ok": True, "incidents": status()})
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/incidents/{name}/disable")
-async def disable_incident(name: str) -> JSONResponse:
+async def disable_incident(request: Request, name: str) -> JSONResponse:
     try:
+        from .audit import record_audit_event
         disable(name)
         log.warning("incident_disabled", service="control", payload={"name": name})
+        record_audit_event(
+            actor="admin",
+            action="INCIDENT_DISABLE",
+            resource=f"incident/{name}",
+            status="SUCCESS",
+            details={"incident_name": name, "correlation_id": getattr(request.state, "correlation_id", None)},
+            ip_address=request.client.host if request.client else "127.0.0.1",
+        )
         return JSONResponse({"ok": True, "incidents": status()})
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

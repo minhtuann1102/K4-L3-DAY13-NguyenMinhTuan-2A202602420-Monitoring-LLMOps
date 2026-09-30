@@ -1,0 +1,44 @@
+name: CI / Observability & Technical Gates
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run Test Suite (pytest)
+      run: |
+        python -m pytest -v
+
+    - name: Validate Dashboard Contract (6/6 panels)
+      run: |
+        python scripts/validate_dashboard.py
+
+    - name: Run Log Validator Technical Gate
+      run: |
+        python scripts/validate_logs.py
+
+    - name: Automated Secret & PII Scan (No raw secrets committed)
+      run: |
+        echo "Scanning for raw credentials in repository..."
+        ! grep -r "sk-lf-[a-z0-9-]*" app/ config/ scripts/ docs/ || { echo "ERROR: Found raw Langfuse secret key in code!"; exit 1; }
+        echo "Check passed: zero secret leaks detected."
