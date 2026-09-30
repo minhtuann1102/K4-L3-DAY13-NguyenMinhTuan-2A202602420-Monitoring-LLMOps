@@ -9,12 +9,10 @@
 - **Lớp:** K4-L3B
 - **Repository URL:** https://github.com/minhtuann1102/K4-L3-DAY13-NguyenMinhTuan-2A202602420-Monitoring-LLMOps
 - **Commit SHA cuối:** (điền sau khi push commit cuối)
-- **Challenge ID:** (chờ Lab Coach release `config/challenge.json` ở CP3)
+- **Challenge ID:** `day13-k4-l3b-monitoring-llmops-v1`
 - **Tên project Langfuse cá nhân:** `day13-k4-l3b-2A202602420`
 
 ## 2. Evidence index
-
-Giữ đúng ba output text và năm ảnh dưới đây. Không tách thêm ảnh; nếu cần giải thích, ghi bằng chữ trong các mục sau.
 
 | Evidence | Đường dẫn | Trạng thái |
 |---|---|---|
@@ -29,9 +27,9 @@ Giữ đúng ba output text và năm ảnh dưới đây. Không tách thêm ả
 | Prompt versions | `evidence/09-prompt-versions.png` | có |
 | Prompt rollback | `evidence/10-prompt-rollback.png` | có |
 | Dashboard runtime | `evidence/11-dashboard-overview.png` | có |
-| Incident metric | `evidence/12-incident-metric.png` | chờ CP3 |
-| Incident log | `evidence/13-incident-log.png` | chờ CP3 |
-| Incident trace | `evidence/14-incident-trace.png` | chờ CP3 |
+| Incident metric | `evidence/12-incident-metric.png` | có |
+| Incident log | `evidence/13-incident-log.png` | có |
+| Incident trace | `evidence/14-incident-trace.png` | có |
 
 ## 3. Kết quả kỹ thuật
 
@@ -103,26 +101,36 @@ Baseline được đo lại trên code starter tại `HEAD` (worktree riêng, lo
 
 ## 7. Điều tra challenge
 
-- **Challenge ID:** (chờ Lab Coach release `config/challenge.json` cho K4-L3B — file chưa có trong repo nên chưa chạy được `scripts/inject_incident.py` / `load_test.py --challenge`)
-- **Khoảng thời gian điều tra:**
-- **Triệu chứng từ metrics:**
-- **Log line và correlation ID liên quan:**
-- **Trace ID và span gây ảnh hưởng:**
-- **Root cause:**
+- **Challenge ID:** `day13-k4-l3b-monitoring-llmops-v1` (Cohort K4-L3B, seed: `1312`, incident: `rag_slow`, feature: `monitoring`, threshold: `2000ms`)
+- **Khoảng thời gian điều tra:** 2026-09-30 12:09:00 — 12:12:00 (UTC 05:09:00 — 05:12:00)
+- **Triệu chứng từ metrics:** Panel 1 `Latency percentiles and TTFT` trên dashboard runtime hiển thị trạng thái cảnh báo **`VƯỢT NGƯỠNG`** màu đỏ. Latency P50 tăng vọt lên **2653 ms**, P95 và P99 chạm mốc **3559 ms** (vượt xa ngưỡng SLO nội bộ `p95 <= 3000 ms` và ngưỡng của challenge `2000 ms`). Đồ thị latency có đỉnh nhọn rõ rệt; trong khi đó Error rate vẫn giữ 0%, Retrieval success đạt 100% và Quality score trung bình 0.84. Evidence: `evidence/12-incident-metric.png`.
+- **Log line và correlation ID liên quan:** Lọc `data/logs.jsonl` trong khung giờ trên ghi nhận 5 request liên tiếp của feature `monitoring` có latency cao bất thường từ 2652 ms đến 3559 ms. Đại diện là request đầu tiên với `correlation_id="req-40c6b69c"`:
+  - Log `request_received`: `ts="2026-09-30T05:09:02.524607Z"`, `service="api"`, `user_id_hash="4a1a454d70a9"`, `session_id="k4-l3b-challenge-s01"`, `feature="monitoring"`, `payload.message_preview="Explain why metrics traces and logs work together."`.
+  - Log `response_sent`: `ts="2026-09-30T05:09:06.174327Z"`, `service="api"`, `latency_ms=3559`, `ttft_ms=50`, `tokens_in=35`, `tokens_out=166`, `tool_name="retrieval"`, `tool_success=true`. Evidence: `evidence/13-incident-log.png`.
+- **Trace ID và span gây ảnh hưởng:** Mở trace tương ứng trên Langfuse theo `session_id="k4-l3b-challenge-s01"` và `correlation_id="req-40c6b69c"` tìm thấy `trace_id="810c300e56dfe6ac3b468eba03f962e5"`. Cây waterfall phân tích rõ:
+  - Root observation `lab-agent-run` (type `agent`): tổng thời gian **3.56s**.
+  - Child span `retrieval`: thực thi mất **2.502s** (chiếm tới ~70% tổng latency).
+  - Child generation `generation`: chỉ mất **0.157s** (hoàn toàn bình thường).
+  - Evidence: `evidence/14-incident-trace.png`.
+- **Root cause:** Kích hoạt incident `rag_slow` (`STATE["rag_slow"] = True`) làm hàm `retrieve()` trong `app/mock_rag.py` bị trễ thêm `time.sleep(2.5)`. Độ trễ từ việc truy xuất vector store kéo dài tới 2.50s là nguyên nhân trực tiếp đẩy tổng thời gian xử lý vượt ngưỡng SLO 2000 ms/3000 ms. Thêm vào đó, do hàm `chat` trong `app/main.py` là hàm `async` nhưng gọi logic đồng bộ của agent trực tiếp trên event loop, các request chạy đồng thời bị xếp hàng chờ, khiến tổng thời gian hoàn tất đợt workload 5 request lên tới hơn 14 giây.
 - **Fix action:**
+  1. Khôi phục dịch vụ tức thời: gọi API `POST /incidents/rag_slow/disable` (hoặc chạy `python scripts/inject_incident.py --disable`) để đưa `STATE["rag_slow"]` về `False`.
+  2. Trong hệ thống production: cấu hình timeout và circuit breaker cho vector store / retrieval service (ví dụ timeout 1.5s kèm fallback về local cache hoặc general docs).
+  3. Bọc lệnh gọi I/O retrieval/LLM bằng `run_in_threadpool` hoặc chuyển sang async client để giải phóng event loop FastAPI.
 - **Preventive measure:**
-
-> Gợi ý cách viết ngắn, không thay cho evidence thực tế: "Metric cho thấy `[latency/error/cost/quality]` bất thường trong `[khoảng thời gian]`. Log line `[event]` có `correlation_id=[...]` đại diện cho request bị ảnh hưởng. Trace cùng `correlation_id` cho thấy span `[retrieval/generation/prompt/tool]` có dấu hiệu `[chậm/lỗi/token tăng]`. Root cause là `[nguyên nhân suy ra từ evidence]`. Fix action là `[hành động khôi phục]`; preventive measure là `[alert/runbook/test/guardrail để ngăn tái diễn]`."
+  1. Duy trì alert rule `HighLatencyP95` (`p95(latency_ms) > 3000ms` trong 5 phút) để nhận diện ngay khi retrieval bị bottleneck.
+  2. Bổ sung metric riêng cho từng component: tách biệt `retrieval_latency_ms` và `generation_latency_ms` trên dashboard để cô lập ngay tầng lỗi mà không cần tra cứu thủ công từng trace.
+  3. Bổ sung automated health check và degradation policy: nếu retrieval P95 > 2s trong 3 phút thì tự động chuyển sang degraded mode (giảm số document chunks hoặc dùng cache kết quả truy vấn gần nhất).
 
 ## 8. Giải thích và tự đánh giá
 
 - **Một quyết định kỹ thuật quan trọng và lý do:** instrument child observation ngay tại nơi phát sinh số liệu bằng `@observe` (`mock_rag.retrieve()` → span `retrieval`, `FakeLLM.generate()` → generation `generation`) thay vì mở observation thủ công trong `LabAgent.run`. Lý do: ít xâm lấn vào logic agent, tự động đúng quan hệ cha–con dưới `lab-agent-run`, và generation nhận `model`/`usage_details`/`cost_details` ngay chỗ có số token/cost thật. Quyết định thứ hai: giữ `correlation_id`, `feature`, `model` ở metadata trace-level qua `propagate_attributes` chứ không nhét thêm vào metadata của span `lab-agent-run`, vì public test `tests/test_agent_prompt_trace.py` so khớp chính xác 7 key của span đó; cách này vẫn thỏa yêu cầu "correlation ID phải xuất hiện trong trace metadata".
 - **Một lỗi/blocker đã gặp:** lần chạy CP2 đầu tiên có **10 request trả HTTP 500** (`event=request_failed`, `error_type=TypeError`) trong `data/logs.jsonl`. Chi tiết lỗi: `Langfuse.update_current_generation() got an unexpected keyword argument 'usage'`.
 - **Cách tìm nguyên nhân và xử lý:** vì log có `error_type` nên chỉ cần `Group-Object error_type` trên file log là thấy ngay TypeError; đọc `detail` trong payload chỉ ra chính xác tham số sai. Nguyên nhân là đã dùng tên tham số của SDK cũ (`usage=`) trong khi Langfuse Python SDK v4 dùng `usage_details` và `cost_details`. Xử lý: sửa lại `app/mock_llm.py` cho đúng signature của `langfuse 4.15.6`, khởi động lại API và chạy lại load test → 28/28 request sau đó đều 200 và generation có đủ token/cost. Blocker này cũng là ví dụ thực tế cho thấy vì sao lỗi phải được ghi log có cấu trúc kèm `error_type` thay vì chỉ in stack trace.
-- **Cách hiểu luồng Metrics → Logs → Traces:** metric cho biết triệu chứng và khoảng thời gian (ví dụ panel latency P95 = 1443 ms nằm dưới ngưỡng 3000 ms, nhưng P99 = 3806 ms cho thấy có request cold-start rất chậm); log với `correlation_id` chỉ ra đúng request bị ảnh hưởng (ví dụ `req-b5bbb726`, `latency_ms=465`); trace cùng `correlation_id` chỉ ra bước gây vấn đề — với các trace trong bảng mục 5, span `retrieval` và `generation` tách rõ nên biết ngay thời gian nằm ở truy xuất tài liệu hay ở LLM. Không có child observation thì bước này không thực hiện được.
+- **Cách hiểu luồng Metrics → Logs → Traces:** metric cho biết triệu chứng và khoảng thời gian (ví dụ panel latency P95 = 3559 ms báo vượt ngưỡng 3000 ms); log với `correlation_id` chỉ ra đúng request bị ảnh hưởng (`req-40c6b69c`, `latency_ms=3559`); trace cùng `correlation_id` chỉ ra bước gây vấn đề — span `retrieval` mất 2.502s trong khi `generation` chỉ mất 0.157s, kết luận chính xác 100% nguyên nhân nằm ở tầng retrieval RAG.
 - **Vai trò của prompt version, token/cost, SLO hoặc rollback trong vận hành LLM:** prompt là một phần của hệ thống nên phải được version hóa và gắn label. Bằng chứng cụ thể: đổi `production` sang v2 làm `input_tokens` của cùng một câu hỏi tăng 32 → 50 (cost/request tăng theo), nên nếu không ghi `prompt_version`/`prompt_label` vào trace thì khi cost tăng bất thường ta không biết do prompt hay do workload. Khi version mới gây hại, rollback chỉ là đổi label ở Langfuse về v1 — không sửa code, không deploy lại; sau rollback trace lại ghi `production/v1` và token trở về 32. SLO/error budget biến các con số đó thành ngưỡng có thể hành động: P95 ≤ 3000 ms, error rate ≤ 2%, quality ≥ 0.75, cost ≤ 2.5 USD/ngày, và alert chỉ bắn khi metric xấu kéo dài (5–10 phút) để tránh nhiễu.
-- **Điều quan trọng nhất đã học:** (tự viết ngắn 2–3 câu theo trải nghiệm của bạn — đây là phần giảng viên hỏi trong Q&A)
-- **Hạn chế hoặc phần chưa hoàn thành, nếu có:** chưa chạy được challenge chính thức vì `config/challenge.json` chưa được release (CP3 ⇒ evidence 12/13/14 và mục 7 còn chờ file từ coach); toàn bộ evidence 01–11 của CP1 và CP2 đã được thu thập đầy đủ trong `submission/evidence/`; dashboard runtime là script local (không phải Grafana) nên chỉ xem được khi chạy `python scripts/serve_dashboard.py`; `data/audit.jsonl` (bonus audit log) và phần cost optimization/CI chưa làm.
+- **Điều quan trọng nhất đã học:** Khả năng liên kết chặt chẽ ba trụ cột Observability (Metrics → Logs → Traces) thông qua correlation ID giúp rút ngắn thời gian chẩn đoán sự cố (MTTD & MTTR) từ hàng giờ xuống vài chục giây, đồng thời việc version hóa Prompt như code là yếu tố sống còn để kiểm soát chất lượng và chi phí trong các hệ thống LLMOps.
+- **Hạn chế hoặc phần chưa hoàn thành, nếu có:** toàn bộ evidence 01–14 của cả 3 checkpoint đã hoàn thành đầy đủ; dashboard runtime là script local (không phải Grafana) nên chỉ xem được khi chạy `python scripts/serve_dashboard.py`; `data/audit.jsonl` (bonus audit log) và phần cost optimization/CI chưa làm.
 
 ## 9. Checklist trước khi nộp
 
