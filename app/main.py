@@ -48,8 +48,14 @@ async def metrics() -> dict:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
-    # TODO: Enrich logs with request context (user_id_hash, session_id, feature, model, env)
-    # bind_contextvars(...)
+    # Enrich logs with request context
+    bind_contextvars(
+        user_id_hash=hash_user_id(body.user_id),
+        session_id=body.session_id,
+        feature=body.feature,
+        model=os.getenv("MODEL_NAME", "fake-llm"),
+        env=os.getenv("APP_ENV", "dev"),
+    )
     
     log.info(
         "request_received",
@@ -57,13 +63,26 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         payload={"message_preview": summarize_text(body.message)},
     )
     try:
-        result = agent.run(
-            user_id=body.user_id,
-            feature=body.feature,
+        from app.tracing import propagate_attributes
+        with propagate_attributes(
+            user_id=hash_user_id(body.user_id),
             session_id=body.session_id,
-            message=body.message,
-            correlation_id=request.state.correlation_id,
-        )
+            tags=["lab", body.feature, agent.model],
+            trace_name="day13-agent-request",
+            environment=os.getenv("APP_ENV", "dev"),
+            metadata={
+                "feature": body.feature,
+                "model": agent.model,
+                "correlation_id": request.state.correlation_id,
+            },
+        ):
+            result = agent.run(
+                user_id=body.user_id,
+                feature=body.feature,
+                session_id=body.session_id,
+                message=body.message,
+                correlation_id=request.state.correlation_id,
+            )
         log.info(
             "response_sent",
             service="api",
